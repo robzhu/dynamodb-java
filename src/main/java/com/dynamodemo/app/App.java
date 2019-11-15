@@ -1,36 +1,56 @@
 package com.dynamodemo.app;
 
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDB;
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClientBuilder;
+import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBAttribute;
+import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBHashKey;
+import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBMapper;
+import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBMapperConfig;
+import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBTable;
 import com.amazonaws.services.securitytoken.AWSSecurityTokenServiceClientBuilder;
 import com.amazonaws.services.securitytoken.model.GetCallerIdentityRequest;
 
-import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
-import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
-import software.amazon.awssdk.services.dynamodb.model.AttributeAction;
-import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
-import software.amazon.awssdk.services.dynamodb.model.AttributeValueUpdate;
-import software.amazon.awssdk.services.dynamodb.model.DeleteItemRequest;
-import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
-import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
-import software.amazon.awssdk.services.dynamodb.model.AttributeValue.Builder;
-
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 
 public class App {
-  private static final String TableName = "workshop";
-  private static Builder AttributeBuilder = AttributeValue.builder();
-  private static DynamoDbClient DynamoClient = DynamoDbClient.create();
+
+  @DynamoDBTable(tableName = "PetStore")
+  public static class Pet {
+    private String id;
+    private String name;
+    private String species;
+
+    @DynamoDBHashKey(attributeName = "id")
+    public String getId() {
+      return id;
+    }
+
+    public void setId(String id) {
+      this.id = id;
+    }
+
+    @DynamoDBAttribute(attributeName = "name")
+    public String getName() {
+      return this.name;
+    }
+
+    public void setName(String name) {
+      this.name = name;
+    }
+
+    @DynamoDBAttribute(attributeName = "species")
+    public String getSpecies() {
+      return this.species;
+    }
+
+    public void setSpecies(String species) {
+      this.species = species;
+    }
+  }
 
   public static void main(String[] args) {
     // testAwsCredentials();
-
-    var id = putItem();
-    printItem(id);
-    updateItem(id);
-    deleteItem(id);
-    printItem(id);
+    testCRUDOperations();
   }
 
   private static void testAwsCredentials() {
@@ -39,69 +59,44 @@ public class App {
     System.out.println("Account ID:" + account);
   }
 
-  private static AttributeValue stringAttribute(String value) {
-    return AttributeBuilder.s(value).build();
-  }
+  private static void testCRUDOperations() {
+    AmazonDynamoDB client = AmazonDynamoDBClientBuilder.standard().build();
+    DynamoDBMapper mapper = new DynamoDBMapper(client);
 
-  private static String putItem() {
-    var itemValues = new HashMap<String, AttributeValue>();
-    var id = UUID.randomUUID().toString();
-    itemValues.put("id", stringAttribute(id));
-    itemValues.put("name", stringAttribute("mochi"));
+    Pet p = new Pet();
+    p.setId(UUID.randomUUID().toString());
+    p.setName("mochi");
+    p.setSpecies("cat");
 
-    System.out.format("\nCreating item with id: %s\n", id);
+    // save the item
+    mapper.save(p);
 
-    var request = PutItemRequest.builder().tableName(TableName).item(itemValues).build();
-    DynamoClient.putItem(request);
-    return id;
-  }
+    // fetch the item
+    Pet retrieved = mapper.load(Pet.class, p.id);
+    System.out.println("Item retrieved:");
+    System.out.println(retrieved);
 
-  private static void printItem(String id) {
-    System.out.format("\nFetching item with id: %s\n", id);
-    var keyToGet = new HashMap<String, AttributeValue>();
-    keyToGet.put("id", stringAttribute(id));
+    // update the item
+    retrieved.setName("buttons");
+    mapper.save(retrieved);
 
-    var request = GetItemRequest.builder().key(keyToGet).tableName(TableName).build();
-    Map<String, AttributeValue> returnItem = DynamoClient.getItem(request).item();
+    System.out.println("Item updated:");
+    System.out.println(retrieved);
 
-    if (returnItem != null) {
-      Set<String> keys = returnItem.keySet();
-      for (String key : keys) {
-        AttributeValue attribute = returnItem.get(key);
-        // this assumes the value is a string
-        System.out.format("%s: %s\n", key, attribute.s());
-      }
+    // read the updated item
+    DynamoDBMapperConfig config = DynamoDBMapperConfig.builder()
+        .withConsistentReads(DynamoDBMapperConfig.ConsistentReads.CONSISTENT).build();
+    Pet updatedPet = mapper.load(Pet.class, p.id, config);
+    System.out.println("Retrieved the previously updated item:");
+    System.out.println(updatedPet);
 
-      if (keys.isEmpty()) {
-        System.out.format("Item returned no keys!\n", id);
-      }
-    } else {
-      System.out.format("No item found with the id %s!\n", id);
+    // delete the item
+    mapper.delete(updatedPet);
+
+    // try to retrieve the deleted item
+    Pet deletedPet = mapper.load(Pet.class, p.id, config);
+    if (deletedPet == null) {
+      System.out.println("Done - Sample pet deleted");
     }
-  }
-
-  private static void updateItem(String id) {
-    System.out.format("\nUpdating item with id: %s\n", id);
-    var itemKey = new HashMap<String, AttributeValue>();
-    itemKey.put("id", stringAttribute(id));
-
-    var attributeUpdates = new HashMap<String, AttributeValueUpdate>();
-    var builder = AttributeValueUpdate.builder();
-    var updateValue = builder.value(stringAttribute("cat")).action(AttributeAction.PUT).build();
-    attributeUpdates.put("type", updateValue);
-
-    var request = UpdateItemRequest.builder().tableName(TableName).key(itemKey).attributeUpdates(attributeUpdates)
-        .build();
-
-    DynamoClient.updateItem(request);
-  }
-
-  private static void deleteItem(String id) {
-    System.out.format("\nDeleting item with id: %s\n", id);
-    var itemKey = new HashMap<String, AttributeValue>();
-    itemKey.put("id", stringAttribute(id));
-
-    var deleteItemRequest = DeleteItemRequest.builder().tableName(TableName).key(itemKey).build();
-    DynamoClient.deleteItem(deleteItemRequest);
   }
 }
